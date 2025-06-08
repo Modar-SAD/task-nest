@@ -12,6 +12,9 @@ import {
   Stack,
   AppBar,
   Toolbar,
+  Paper,
+  Alert,
+  Snackbar,
 } from '@mui/material';
 import {
   Google as GoogleIcon,
@@ -144,26 +147,12 @@ const StyledTextField = styled(TextField)(({ theme }) => ({
   },
 }));
 
-const FeatureGlass = styled(Box)(({ theme }) => ({
-  background: GLASS_BG,
-  borderRadius: '2.5rem',
-  boxShadow: '0 8px 40px 0 rgba(0,0,0,0.45)',
-  backdropFilter: 'blur(18px)',
-  borderTop: '1px solid rgba(255,255,255,0.06)',
-  borderBottom: '1px solid rgba(255,255,255,0.06)',
-  borderLeft: 0,
-  borderRight: 0,
-  color: '#fff',
-  minHeight: 0,
-  display: 'flex',
-  flexDirection: 'column',
-  justifyContent: 'center',
-  width: '100%',
-  height: 'auto',
-  maxHeight: '90vh',
-  position: 'relative',
-  overflow: 'hidden',
-  padding: 'clamp(2rem, 6vw, 6rem) clamp(1.5rem, 4vw, 4rem)',
+const FeatureGlass = styled(Paper)(({ theme }) => ({
+  padding: theme.spacing(4),
+  borderRadius: theme.spacing(2),
+  backdropFilter: 'blur(10px)',
+  backgroundColor: 'rgba(255, 255, 255, 0.1)',
+  border: '1px solid rgba(255, 255, 255, 0.2)',
   margin: 'auto',
   alignSelf: 'center',
   boxShadow: '0 8px 40px 0 rgba(0,0,0,0.45), 0 1.5px 8px 0 #232323',
