@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import {
   Box,
   Button,
@@ -15,6 +16,7 @@ import {
   Paper,
   Alert,
   Snackbar,
+  CircularProgress,
 } from '@mui/material';
 import {
   Google as GoogleIcon,
@@ -29,6 +31,7 @@ import AutoAwesomeMotionIcon from '@mui/icons-material/AutoAwesomeMotion';
 import DashboardCustomizeIcon from '@mui/icons-material/DashboardCustomize';
 import LockOpenIcon from '@mui/icons-material/LockOpen';
 import BusinessCenterIcon from '@mui/icons-material/BusinessCenter';
+import { useAuth } from '../../hooks/useAuth';
 
 // Accent colors
 const ACCENT_GREEN = '#baff5e';
@@ -235,6 +238,8 @@ const SOCIALS = [
 ];
 
 const Signup = () => {
+  const navigate = useNavigate();
+  const { signUpWithEmail, signInWithGoogle, signInWithGithub, loading, error } = useAuth();
   const [showPassword, setShowPassword] = useState(false);
   const [formData, setFormData] = useState({
     firstName: '',
@@ -242,17 +247,75 @@ const Signup = () => {
     email: '',
     password: '',
   });
+  const [formErrors, setFormErrors] = useState({});
+  const [showError, setShowError] = useState(false);
 
-  const handleChange = (e) => {
-    setFormData({
-      ...formData,
-      [e.target.name]: e.target.value,
-    });
+  const validateForm = () => {
+    const errors = {};
+    
+    if (!formData.firstName.trim()) {
+      errors.firstName = 'First name is required';
+    }
+    
+    if (!formData.email.trim()) {
+      errors.email = 'Email is required';
+    } else if (!/^[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}$/i.test(formData.email)) {
+      errors.email = 'Invalid email address';
+    }
+    
+    if (!formData.password) {
+      errors.password = 'Password is required';
+    } else if (formData.password.length < 6) {
+      errors.password = 'Password must be at least 6 characters';
+    }
+
+    setFormErrors(errors);
+    return Object.keys(errors).length === 0;
   };
 
-  const handleSubmit = (e) => {
+  const handleChange = (e) => {
+    const { name, value } = e.target;
+    setFormData(prev => ({
+      ...prev,
+      [name]: value
+    }));
+    // Clear error when user starts typing
+    if (formErrors[name]) {
+      setFormErrors(prev => ({
+        ...prev,
+        [name]: ''
+      }));
+    }
+  };
+
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    console.log('Form submitted:', formData);
+    if (!validateForm()) return;
+
+    try {
+      await signUpWithEmail(
+        formData.email,
+        formData.password,
+        formData.firstName,
+        formData.lastName
+      );
+      navigate('/dashboard');
+    } catch (err) {
+      setShowError(true);
+    }
+  };
+
+  const handleSocialSignIn = async (provider) => {
+    try {
+      if (provider === 'google') {
+        await signInWithGoogle();
+      } else if (provider === 'github') {
+        await signInWithGithub();
+      }
+      navigate('/dashboard');
+    } catch (err) {
+      setShowError(true);
+    }
   };
 
   return (
@@ -267,110 +330,130 @@ const Signup = () => {
       <Box sx={{ flex: 1, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, alignItems: 'center', justifyContent: 'center', height: '100%', minHeight: 'calc(100vh - clamp(56px, 7vw, 80px))' }}>
         {/* Left: Signup */}
         <Box sx={{ flex: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', alignItems: 'flex-end', px: { xs: 2, md: '6vw' }, py: 'clamp(2rem, 6vw, 6rem)', minWidth: 0, width: '100%' }}>
-          <Box sx={{ width: '100%', maxWidth: '600px', minWidth: 0 }}>
-            <Typography variant="h2" fontWeight={800} mb={2} sx={{ color: '#fff', lineHeight: 1.1, fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}>
-              Start collaborating<br />in less than 30 seconds. <Box component="span" sx={{ color: ACCENT_ORANGE, fontSize: 'clamp(2rem, 4vw, 3rem)', verticalAlign: 'middle' }}>⚡</Box>
-            </Typography>
-            <form onSubmit={handleSubmit} autoComplete="off">
-              <Grid container spacing={2}>
-                <Grid item xs={12} sm={6}>
-                  <StyledTextField
-                    fullWidth
-                    label="First Name"
-                    name="firstName"
-                    value={formData.firstName}
-                    onChange={handleChange}
-                    placeholder="John"
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <StyledTextField
-                    fullWidth
-                    label="Last Name (optional)"
-                    name="lastName"
-                    value={formData.lastName}
-                    onChange={handleChange}
-                    placeholder="Doe"
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6}>
-                  <StyledTextField
-                    fullWidth
-                    label="Email"
-                    name="email"
-                    type="email"
-                    value={formData.email}
-                    onChange={handleChange}
-                    placeholder="johndoe@mail.com"
-                    required
-                  />
-                </Grid>
-                <Grid item xs={12} sm={6} sx={{ display: 'flex', alignItems: 'center' }}>
-                  <StyledTextField
-                    fullWidth
-                    label="Password"
-                    name="password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={formData.password}
-                    onChange={handleChange}
-                    required
-                  />
-                  <IconButton
-                    onClick={() => setShowPassword(!showPassword)}
-                    edge="end"
-                    sx={{ color: SOFT_LABEL, ml: 1 }}
-                    tabIndex={-1}
-                    aria-label="toggle password visibility"
-                  >
-                    {showPassword ? <VisibilityOff /> : <Visibility />}
-                  </IconButton>
-                </Grid>
-                <Grid item xs={12}>
-                  <NeonButton fullWidth size="large" type="submit">
-                    Create My Account
-                  </NeonButton>
-                </Grid>
+          <Typography variant="h2" fontWeight={800} mb={2} sx={{ color: '#fff', lineHeight: 1.1, fontSize: 'clamp(2rem, 4vw, 3.5rem)' }}>
+            Start collaborating<br />in less than 30 seconds. <Box component="span" sx={{ color: ACCENT_ORANGE, fontSize: 'clamp(2rem, 4vw, 3rem)', verticalAlign: 'middle' }}>⚡</Box>
+          </Typography>
+          <form onSubmit={handleSubmit} autoComplete="off">
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <StyledTextField
+                  fullWidth
+                  label="First Name"
+                  name="firstName"
+                  value={formData.firstName}
+                  onChange={handleChange}
+                  placeholder="John"
+                  required
+                  error={!!formErrors.firstName}
+                  helperText={formErrors.firstName}
+                />
               </Grid>
-            </form>
-            {/* Info Row: Terms and Login */}
-            <Stack
-              direction={{ xs: 'column', sm: 'row' }}
-              spacing={2}
-              alignItems="center"
-              justifyContent="space-between"
-              sx={{
-                mt: 3,
-                mb: 1,
-                fontSize: 'clamp(0.95rem, 1vw, 1.1rem)',
-                color: SOFT_LABEL,
-                textAlign: { xs: 'center', sm: 'left' }
-              }}
+              <Grid item xs={12} sm={6}>
+                <StyledTextField
+                  fullWidth
+                  label="Last Name (optional)"
+                  name="lastName"
+                  value={formData.lastName}
+                  onChange={handleChange}
+                  placeholder="Doe"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <StyledTextField
+                  fullWidth
+                  label="Email"
+                  name="email"
+                  type="email"
+                  value={formData.email}
+                  onChange={handleChange}
+                  placeholder="johndoe@mail.com"
+                  required
+                  error={!!formErrors.email}
+                  helperText={formErrors.email}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} sx={{ display: 'flex', alignItems: 'center' }}>
+                <StyledTextField
+                  fullWidth
+                  label="Password"
+                  name="password"
+                  type={showPassword ? 'text' : 'password'}
+                  value={formData.password}
+                  onChange={handleChange}
+                  required
+                  error={!!formErrors.password}
+                  helperText={formErrors.password}
+                />
+                <IconButton
+                  onClick={() => setShowPassword(!showPassword)}
+                  edge="end"
+                  sx={{ color: SOFT_LABEL, ml: 1 }}
+                  tabIndex={-1}
+                  aria-label="toggle password visibility"
+                >
+                  {showPassword ? <VisibilityOff /> : <Visibility />}
+                </IconButton>
+              </Grid>
+              <Grid item xs={12}>
+                <NeonButton 
+                  fullWidth 
+                  size="large" 
+                  type="submit"
+                  disabled={loading}
+                >
+                  {loading ? (
+                    <CircularProgress size={24} color="inherit" />
+                  ) : (
+                    'Create My Account'
+                  )}
+                </NeonButton>
+              </Grid>
+            </Grid>
+          </form>
+          {/* Info Row: Terms and Login */}
+          <Stack
+            direction={{ xs: 'column', sm: 'row' }}
+            spacing={2}
+            alignItems="center"
+            justifyContent="space-between"
+            sx={{
+              mt: 3,
+              mb: 1,
+              fontSize: 'clamp(0.95rem, 1vw, 1.1rem)',
+              color: SOFT_LABEL,
+              textAlign: { xs: 'center', sm: 'left' }
+            }}
+          >
+            <span>
+              By registering, you agree to our{' '}
+              <Link href="/terms" target="_blank" rel="noopener" sx={{ color: ACCENT_GREEN, fontWeight: 600 }}>Terms of Service</Link>
+              {' '}and{' '}
+              <Link href="/privacy" target="_blank" rel="noopener" sx={{ color: ACCENT_GREEN, fontWeight: 600 }}>Privacy Policy</Link>.
+            </span>
+            <span>
+              Already registered?{' '}
+              <Link href="/login" sx={{ color: ACCENT_ORANGE, fontWeight: 600 }}>Login</Link>
+            </span>
+          </Stack>
+          <Divider sx={{ my: 2, borderColor: '#232323', color: SOFT_LABEL }}>Or continue with</Divider>
+          <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
+            <SocialButton 
+              provider="google" 
+              startIcon={<GoogleIcon style={{ fontSize: 40, marginRight: 16 }} />} 
+              onClick={() => handleSocialSignIn('google')}
+              disabled={loading}
             >
-              <span>
-                By registering, you agree to our{' '}
-                <Link href="/terms" target="_blank" rel="noopener" sx={{ color: ACCENT_GREEN, fontWeight: 600 }}>Terms of Service</Link>
-                {' '}and{' '}
-                <Link href="/privacy" target="_blank" rel="noopener" sx={{ color: ACCENT_GREEN, fontWeight: 600 }}>Privacy Policy</Link>.
-              </span>
-              <span>
-                Already registered?{' '}
-                <Link href="/login" sx={{ color: ACCENT_ORANGE, fontWeight: 600 }}>Login</Link>
-              </span>
-            </Stack>
-            <Divider sx={{ my: 2, borderColor: '#232323', color: SOFT_LABEL }}>Or continue with</Divider>
-            <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-              <SocialButton provider="google" startIcon={<GoogleIcon style={{ fontSize: 40, marginRight: 16 }} />} onClick={() => window.location.href = '/login/google'}>
-                Continue with Google
-              </SocialButton>
-              <SocialButton provider="apple" startIcon={<AppleIcon style={{ fontSize: 40, marginRight: 16 }} />} onClick={() => window.location.href = '/login/apple'}>
-                Continue with Apple
-              </SocialButton>
-              <SocialButton provider="github" startIcon={<GitHubIcon style={{ fontSize: 40, marginRight: 20,marginLeft: 4 }} />} onClick={() => window.location.href = '/login/github'}>
-                Continue with Github
-              </SocialButton>
-            </Stack>
-          </Box>
+              Continue with Google
+            </SocialButton>
+            <SocialButton 
+              provider="github" 
+              startIcon={<GitHubIcon style={{ fontSize: 40, marginRight: 20, marginLeft: 4 }} />} 
+              onClick={() => handleSocialSignIn('github')}
+              disabled={loading}
+            >
+              Continue with Github
+            </SocialButton>
+          </Stack>
         </Box>
         {/* Right: Feature Glass Section */}
         <Box sx={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', px: { xs: 2, md: '6vw' }, py: 'clamp(2rem, 6vw, 6rem)', minWidth: 0, width: '100%' }}>
@@ -424,6 +507,20 @@ const Signup = () => {
           </FeatureGlass>
         </Box>
       </Box>
+      <Snackbar
+        open={showError}
+        autoHideDuration={6000}
+        onClose={() => setShowError(false)}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={() => setShowError(false)} 
+          severity="error" 
+          sx={{ width: '100%', bgcolor: '#232323', color: '#fff' }}
+        >
+          {error || 'An error occurred during sign up. Please try again.'}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
