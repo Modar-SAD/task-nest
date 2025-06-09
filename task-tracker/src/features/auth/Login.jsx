@@ -12,10 +12,11 @@ import {
   Stack,
   AppBar,
   Toolbar,
+  Alert,
+  Snackbar,
 } from '@mui/material';
 import {
   Google as GoogleIcon,
-  Apple as AppleIcon,
   GitHub as GitHubIcon,
   Visibility,
   VisibilityOff,
@@ -24,6 +25,14 @@ import { styled, keyframes } from '@mui/material/styles';
 import GroupIcon from '@mui/icons-material/Group';
 import AutoAwesomeMotionIcon from '@mui/icons-material/AutoAwesomeMotion';
 import DashboardCustomizeIcon from '@mui/icons-material/DashboardCustomize';
+import { useNavigate } from 'react-router-dom';
+import { 
+  signInWithEmailAndPassword, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  GithubAuthProvider 
+} from 'firebase/auth';
+import { auth } from '../../services/firebase';
 
 const ACCENT_GREEN = '#baff5e';
 const ACCENT_PURPLE = '#a18fff';
@@ -104,14 +113,13 @@ const SocialButton = styled(Button)(({ theme, provider }) => ({
   gap: theme.spacing(1),
   boxShadow: '0 2px 8px 0 #0002',
   '&:hover, &:focus': {
-    background: provider === 'google' ? '#2d3e2e' : provider === 'apple' ? '#23223a' : provider === 'github' ? '#2d2323' : '#232323',
+    background: provider === 'google' ? '#2d3e2e' : provider === 'github' ? '#2d2323' : '#232323',
     boxShadow: `0 0 12px 2px ${ACCENT_GREEN}40`,
     transform: 'scale(1.03)',
   },
   '& .MuiButton-startIcon': {
     color:
       provider === 'google' ? '#34a853' :
-      provider === 'apple' ? '#a18fff' :
       provider === 'github' ? '#ffb86b' : ACCENT_GREEN,
     fontSize: 40,
     marginRight: 16,
@@ -208,19 +216,22 @@ const InfoText = styled(Typography)(({ theme }) => ({
   gap: 4,
 }));
 
-const InfoLink = styled(Link)(({ theme }) => ({
-  color: ACCENT_GREEN,
+const InfoLink = styled(Link)(({ theme, provider }) => ({
+  color: provider === 'google' ? '#34a853' : provider === 'github' ? '#ffb86b' : ACCENT_GREEN,
   textDecoration: 'underline',
   fontWeight: 500,
   transition: 'color 0.2s',
   '&:hover': {
-    color: ACCENT_ORANGE,
+    color: provider === 'google' ? '#2d3e2e' : provider === 'github' ? '#ffa94d' : ACCENT_ORANGE,
     textDecoration: 'underline',
   },
 }));
 
 const Login = () => {
+  const navigate = useNavigate();
   const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState(null);
   const [formData, setFormData] = useState({
     email: '',
     password: '',
@@ -233,15 +244,47 @@ const Login = () => {
     });
   };
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
-    // Handle login logic here
-    console.log('Login submitted:', formData);
+    setError(null);
+    setLoading(true);
+
+    if (!formData.email || !formData.password) {
+      setError('Email and password are required.');
+      setLoading(false);
+      return;
+    }
+
+    try {
+      await signInWithEmailAndPassword(auth, formData.email, formData.password);
+      navigate('/dashboard', { replace: true });
+    } catch (error) {
+      setError('The username or password is wrong');
+    } finally {
+      setLoading(false);
+    }
   };
 
-  // Social login handlers (replace with your actual OAuth routes)
-  const handleSocialLogin = (provider) => {
-    window.location.href = `/login/${provider}`;
+  const handleSocialLogin = async (provider) => {
+    setError(null);
+    setLoading(true);
+
+    try {
+      const authProvider = provider === 'google' 
+        ? new GoogleAuthProvider() 
+        : new GithubAuthProvider();
+
+      await signInWithPopup(auth, authProvider);
+      navigate('/dashboard', { replace: true });
+    } catch (error) {
+      if (error.code === 'auth/popup-closed-by-user') {
+        setError('Login cancelled. Please try again.');
+      } else {
+        setError('Something went wrong. Please try again later.');
+      }
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -272,6 +315,7 @@ const Login = () => {
                     onChange={handleChange}
                     placeholder="johndoe@mail.com"
                     required
+                    disabled={loading}
                   />
                 </Grid>
                 <Grid item xs={12}>
@@ -283,6 +327,7 @@ const Login = () => {
                     value={formData.password}
                     onChange={handleChange}
                     required
+                    disabled={loading}
                     InputProps={{
                       endAdornment: (
                         <InputAdornment position="end">
@@ -290,6 +335,7 @@ const Login = () => {
                             onClick={() => setShowPassword(!showPassword)}
                             edge="end"
                             sx={{ color: SOFT_LABEL }}
+                            disabled={loading}
                           >
                             {showPassword ? <VisibilityOff /> : <Visibility />}
                           </IconButton>
@@ -304,8 +350,13 @@ const Login = () => {
                   </Link>
                 </Grid>
                 <Grid item xs={12}>
-                  <NeonButton fullWidth size="large" type="submit">
-                    Login
+                  <NeonButton 
+                    fullWidth 
+                    size="large" 
+                    type="submit"
+                    disabled={loading}
+                  >
+                    {loading ? 'Logging in...' : 'Login'}
                   </NeonButton>
                 </Grid>
               </Grid>
@@ -314,18 +365,25 @@ const Login = () => {
             <InfoRow>
               <InfoText>
                 Don&apos;t have an account?
-                <InfoLink href="/signup">Create one</InfoLink>
+                <InfoLink href="/signup" provider="google">Create one</InfoLink>
               </InfoText>
             </InfoRow>
             <Divider sx={{ my: 2, borderColor: '#232323', color: SOFT_LABEL }}>Or continue with</Divider>
             <Stack direction="row" spacing={2} sx={{ mb: 2 }}>
-              <SocialButton provider="google" startIcon={<GoogleIcon style={{ fontSize: 40, marginRight: 16 }} />} onClick={() => handleSocialLogin('google')}>
+              <SocialButton 
+                provider="google" 
+                startIcon={<GoogleIcon style={{ fontSize: 40, marginRight: 16 }} />} 
+                onClick={() => handleSocialLogin('google')}
+                disabled={loading}
+              >
                 Continue with Google
               </SocialButton>
-              <SocialButton provider="apple" startIcon={<AppleIcon style={{ fontSize: 40, marginRight: 16 }} />} onClick={() => handleSocialLogin('apple')}>
-                Continue with Apple
-              </SocialButton>
-              <SocialButton provider="github" startIcon={<GitHubIcon style={{ fontSize: 40, marginRight: 16 }} />} onClick={() => handleSocialLogin('github')}>
+              <SocialButton 
+                provider="github" 
+                startIcon={<GitHubIcon style={{ fontSize: 40, marginRight: 16 }} />} 
+                onClick={() => handleSocialLogin('github')}
+                disabled={loading}
+              >
                 Continue with Github
               </SocialButton>
             </Stack>
@@ -375,6 +433,20 @@ const Login = () => {
           </FeatureGlass>
         </Box>
       </Box>
+      <Snackbar 
+        open={!!error} 
+        autoHideDuration={6000} 
+        onClose={() => setError(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        <Alert 
+          onClose={() => setError(null)} 
+          severity="error" 
+          sx={{ width: '100%', bgcolor: '#232323', color: '#fff', '& .MuiAlert-icon': { color: '#ff6b6b' } }}
+        >
+          {error}
+        </Alert>
+      </Snackbar>
     </Box>
   );
 };
