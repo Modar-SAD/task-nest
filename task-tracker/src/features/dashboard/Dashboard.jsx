@@ -37,6 +37,7 @@ import {
   Fab,
   Modal,
   InputAdornment,
+  CircularProgress,
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -59,36 +60,7 @@ import { LocalizationProvider, DatePicker } from '@mui/x-date-pickers';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ThemeProvider, createTheme } from '@mui/material/styles';
 import { useNavigate } from 'react-router-dom';
-
-const initialTasks = {
-  todo: [
-    {
-      id: '1',
-      title: 'Complete Project Proposal',
-      description: 'Write and submit the project proposal document',
-      deadline: new Date('2024-04-01'),
-      status: 'todo',
-    },
-  ],
-  inProgress: [
-    {
-      id: '2',
-      title: 'Design System Implementation',
-      description: 'Implement the new design system components',
-      deadline: new Date('2024-03-25'),
-      status: 'inProgress',
-    },
-  ],
-  done: [
-    {
-      id: '3',
-      title: 'User Research',
-      description: 'Conduct user interviews and analyze results',
-      deadline: new Date('2024-03-20'),
-      status: 'done',
-    },
-  ],
-};
+import { auth, taskService } from '../../services/firebase';
 
 const Dashboard = () => {
   const navigate = useNavigate();
@@ -144,7 +116,7 @@ const Dashboard = () => {
     },
   }), [mode]);
 
-  const [tasks, setTasks] = useState(initialTasks);
+  const [tasks, setTasks] = useState({});
   const [openDialog, setOpenDialog] = useState(false);
   const [filter, setFilter] = useState('all');
   const [newTask, setNewTask] = useState({
@@ -167,61 +139,103 @@ const Dashboard = () => {
     },
   ]);
   const chatEndRef = useRef(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const unsubscribeRef = useRef(null);
 
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const isTablet = useMediaQuery(theme.breakpoints.down('md'));
 
-  const handleDragEnd = (result) => {
+  useEffect(() => {
+    const user = auth.currentUser;
+    if (!user) {
+      navigate('/login');
+      return;
+    }
+
+    try {
+      unsubscribeRef.current = taskService.subscribeToTasks(user.uid, (updatedTasks) => {
+        setTasks(updatedTasks);
+        setLoading(false);
+      });
+    } catch (error) {
+      setError(error.message);
+      setLoading(false);
+    }
+
+    return () => {
+      if (unsubscribeRef.current) {
+        unsubscribeRef.current();
+      }
+    };
+  }, [navigate]);
+
+  const handleDragEnd = async (result) => {
     if (!result.destination) return;
 
     const { source, destination } = result;
     const sourceColumn = source.droppableId;
     const destColumn = destination.droppableId;
+    const user = auth.currentUser;
 
-    if (sourceColumn === destColumn) {
-      const column = tasks[sourceColumn];
-      const copiedItems = [...column];
-      const [removed] = copiedItems.splice(source.index, 1);
-      copiedItems.splice(destination.index, 0, removed);
-      setTasks({
-        ...tasks,
-        [sourceColumn]: copiedItems,
-      });
-    } else {
-      const sourceItems = [...tasks[sourceColumn]];
-      const destItems = [...tasks[destColumn]];
-      const [removed] = sourceItems.splice(source.index, 1);
-      removed.status = destColumn;
-      destItems.splice(destination.index, 0, removed);
-      setTasks({
-        ...tasks,
-        [sourceColumn]: sourceItems,
-        [destColumn]: destItems,
-      });
+    if (!user) return;
+
+    try {
+      if (sourceColumn === destColumn) {
+        const column = tasks[sourceColumn];
+        const copiedItems = [...column];
+        const [removed] = copiedItems.splice(source.index, 1);
+        copiedItems.splice(destination.index, 0, removed);
+        setTasks({
+          ...tasks,
+          [sourceColumn]: copiedItems,
+        });
+      } else {
+        const sourceItems = [...tasks[sourceColumn]];
+        const destItems = [...tasks[destColumn]];
+        const [removed] = sourceItems.splice(source.index, 1);
+        removed.status = destColumn;
+        destItems.splice(destination.index, 0, removed);
+        
+        await taskService.updateTask(user.uid, removed.id, { status: destColumn });
+        
+        setTasks({
+          ...tasks,
+          [sourceColumn]: sourceItems,
+          [destColumn]: destItems,
+        });
+      }
+    } catch (error) {
+      setError(error.message);
+      showNotification('Failed to update task status');
     }
   };
 
-  const handleAddTask = () => {
-    const newTaskWithId = {
-      ...newTask,
-      id: Date.now().toString(),
-      status: 'todo',
-    };
-    setTasks({
-      ...tasks,
-      todo: [...tasks.todo, newTaskWithId],
-    });
-    setNewTask({ title: '', description: '', deadline: new Date() });
-    setOpenDialog(false);
-    
-    // Add assistant message about task creation
-    const taskMessage = {
-      id: chatMessages.length + 1,
-      type: 'assistant',
-      content: "I've created a new task for you. Let me know if you need any help managing it!",
-      timestamp: new Date(),
-    };
-    setChatMessages(prev => [...prev, taskMessage]);
+  const handleAddTask = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      const newTaskWithId = {
+        ...newTask,
+        status: 'todo',
+      };
+      
+      await taskService.addTask(user.uid, newTaskWithId);
+      setNewTask({ title: '', description: '', deadline: new Date() });
+      setOpenDialog(false);
+      
+      const taskMessage = {
+        id: chatMessages.length + 1,
+        type: 'assistant',
+        content: "I've created a new task for you. Let me know if you need any help managing it!",
+        timestamp: new Date(),
+      };
+      setChatMessages(prev => [...prev, taskMessage]);
+    } catch (error) {
+      setError(error.message);
+      showNotification('Failed to add task');
+    }
   };
 
   const getStatusDescription = (status) => {
@@ -287,15 +301,15 @@ const Dashboard = () => {
   };
 
   const filteredTasks = {
-    todo: tasks.todo.filter(task => 
+    todo: tasks.todo?.filter(task => 
       filter === 'all' || (filter === 'pending' && task.status !== 'done')
-    ),
-    inProgress: tasks.inProgress.filter(task => 
+    ) || [],
+    inProgress: tasks.inProgress?.filter(task => 
       filter === 'all' || (filter === 'pending' && task.status !== 'done')
-    ),
-    done: tasks.done.filter(task => 
+    ) || [],
+    done: tasks.done?.filter(task => 
       filter === 'all' || (filter === 'completed' && task.status === 'done')
-    ),
+    ) || [],
   };
 
   const handleUserMenuClick = (event) => {
@@ -310,30 +324,41 @@ const Dashboard = () => {
     setEditingTask(task);
   };
 
-  const handleTaskUpdate = (updatedTask) => {
-    const columnId = updatedTask.status;
-    setTasks(prevTasks => ({
-      ...prevTasks,
-      [columnId]: prevTasks[columnId].map(task => 
-        task.id === updatedTask.id ? updatedTask : task
-      ),
-    }));
-    setEditingTask(null);
-    showNotification('Task updated successfully');
+  const handleTaskUpdate = async (updatedTask) => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      await taskService.updateTask(user.uid, updatedTask.id, {
+        title: updatedTask.title,
+        description: updatedTask.description,
+        deadline: updatedTask.deadline,
+      });
+      
+      setEditingTask(null);
+      showNotification('Task updated successfully');
+    } catch (error) {
+      setError(error.message);
+      showNotification('Failed to update task');
+    }
   };
 
   const handleDeleteTask = (task) => {
     setDeleteConfirmTask(task);
   };
 
-  const confirmDeleteTask = () => {
-    const columnId = deleteConfirmTask.status;
-    setTasks(prevTasks => ({
-      ...prevTasks,
-      [columnId]: prevTasks[columnId].filter(task => task.id !== deleteConfirmTask.id),
-    }));
-    setDeleteConfirmTask(null);
-    showNotification('Task deleted successfully');
+  const confirmDeleteTask = async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+
+    try {
+      await taskService.deleteTask(user.uid, deleteConfirmTask.id);
+      setDeleteConfirmTask(null);
+      showNotification('Task deleted successfully');
+    } catch (error) {
+      setError(error.message);
+      showNotification('Failed to delete task');
+    }
   };
 
   const showNotification = (message) => {
@@ -367,7 +392,6 @@ const Dashboard = () => {
     setChatMessages([...chatMessages, newMessage]);
     setAssistantMessage('');
 
-    // Simulate AI response (replace with actual AI integration)
     setTimeout(() => {
       const aiResponse = {
         id: chatMessages.length + 2,
@@ -586,316 +610,348 @@ const Dashboard = () => {
             p: { xs: 1, sm: 2, md: 3 },
             display: 'flex',
             flexDirection: 'column',
+            position: 'relative',
           }}
         >
-          <DragDropContext onDragEnd={handleDragEnd}>
-            <Box 
-              sx={{ 
-                display: 'grid',
-                gridTemplateColumns: {
-                  xs: '1fr',
-                  sm: 'repeat(2, 1fr)',
-                  md: 'repeat(3, 1fr)',
-                },
-                gap: { xs: 2, sm: 3 },
-                height: '100%',
-                overflow: 'hidden',
-                alignItems: 'stretch',
+          {loading ? (
+            <Box
+              sx={{
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                gap: 2,
               }}
             >
-              {Object.entries(filteredTasks).map(([columnId, columnTasks]) => {
-                const columnTheme = getColumnTheme(columnId);
-                return (
-                  <Paper
-                    key={columnId}
-                    elevation={0}
-                    sx={{
-                      p: 2,
-                      backgroundColor: alpha(columnTheme.main, 0.1),
-                      borderRadius: 4,
-                      border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
-                      display: 'flex',
-                      flexDirection: 'column',
-                      height: '100%',
-                      transition: 'all 0.3s ease-in-out',
-                      '&:hover': {
-                        backgroundColor: alpha(columnTheme.main, 0.15),
-                        transform: 'translateY(-2px)',
-                        boxShadow: 3,
-                      },
-                      position: 'relative',
-                      overflow: 'hidden',
-                      '&::before': {
-                        content: '""',
-                        position: 'absolute',
-                        top: 0,
-                        left: 0,
-                        right: 0,
-                        bottom: 0,
-                        background: `linear-gradient(180deg, ${alpha(theme.palette.background.paper, 0.1)} 0%, transparent 100%)`,
-                        pointerEvents: 'none',
-                      },
-                    }}
-                  >
-                    <Typography 
-                      variant="h6" 
-                      sx={{ 
-                        mb: 2, 
-                        textTransform: 'capitalize',
-                        fontWeight: 600,
-                        color: theme.palette.text.primary,
+              <CircularProgress />
+              <Typography>Loading tasks...</Typography>
+            </Box>
+          ) : error ? (
+            <Alert 
+              severity="error" 
+              sx={{ 
+                position: 'absolute',
+                top: '50%',
+                left: '50%',
+                transform: 'translate(-50%, -50%)',
+                minWidth: 300,
+              }}
+            >
+              {error}
+            </Alert>
+          ) : (
+            <DragDropContext onDragEnd={handleDragEnd}>
+              <Box 
+                sx={{ 
+                  display: 'grid',
+                  gridTemplateColumns: {
+                    xs: '1fr',
+                    sm: 'repeat(2, 1fr)',
+                    md: 'repeat(3, 1fr)',
+                  },
+                  gap: { xs: 2, sm: 3 },
+                  height: '100%',
+                  overflow: 'hidden',
+                  alignItems: 'stretch',
+                }}
+              >
+                {Object.entries(filteredTasks).map(([columnId, columnTasks]) => {
+                  const columnTheme = getColumnTheme(columnId);
+                  return (
+                    <Paper
+                      key={columnId}
+                      elevation={0}
+                      sx={{
+                        p: 2,
+                        backgroundColor: alpha(columnTheme.main, 0.1),
+                        borderRadius: 4,
+                        border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
                         display: 'flex',
-                        alignItems: 'center',
-                        gap: 1,
-                        px: 1,
+                        flexDirection: 'column',
+                        height: '100%',
+                        transition: 'all 0.3s ease-in-out',
+                        '&:hover': {
+                          backgroundColor: alpha(columnTheme.main, 0.15),
+                          transform: 'translateY(-2px)',
+                          boxShadow: 3,
+                        },
+                        position: 'relative',
+                        overflow: 'hidden',
+                        '&::before': {
+                          content: '""',
+                          position: 'absolute',
+                          top: 0,
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          background: `linear-gradient(180deg, ${alpha(theme.palette.background.paper, 0.1)} 0%, transparent 100%)`,
+                          pointerEvents: 'none',
+                        },
                       }}
                     >
-                      {columnId.replace(/([A-Z])/g, ' $1').trim()}
-                      <Chip 
-                        label={columnTasks.length} 
-                        size="small" 
+                      <Typography 
+                        variant="h6" 
                         sx={{ 
-                          ml: 'auto',
-                          backgroundColor: alpha(columnTheme.main, 0.15),
-                          color: columnTheme.main,
+                          mb: 2, 
+                          textTransform: 'capitalize',
                           fontWeight: 600,
-                          border: `1px solid ${alpha(columnTheme.main, 0.3)}`,
-                          '&:hover': {
-                            backgroundColor: alpha(columnTheme.main, 0.25),
-                          },
-                          transition: 'all 0.2s ease-in-out',
-                        }} 
-                      />
-                    </Typography>
-                    <Droppable droppableId={columnId}>
-                      {(provided, snapshot) => (
-                        <Box
-                          ref={provided.innerRef}
-                          {...provided.droppableProps}
+                          color: theme.palette.text.primary,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 1,
+                          px: 1,
+                        }}
+                      >
+                        {columnId.replace(/([A-Z])/g, ' $1').trim()}
+                        <Chip 
+                          label={columnTasks.length} 
+                          size="small" 
                           sx={{ 
-                            flex: 1,
-                            overflowY: 'auto',
-                            overflowX: 'hidden',
-                            px: 1,
-                            mx: -1,
-                            '&::-webkit-scrollbar': {
-                              width: '8px',
+                            ml: 'auto',
+                            backgroundColor: alpha(columnTheme.main, 0.15),
+                            color: columnTheme.main,
+                            fontWeight: 600,
+                            border: `1px solid ${alpha(columnTheme.main, 0.3)}`,
+                            '&:hover': {
+                              backgroundColor: alpha(columnTheme.main, 0.25),
                             },
-                            '&::-webkit-scrollbar-track': {
-                              backgroundColor: 'transparent',
-                            },
-                            '&::-webkit-scrollbar-thumb': {
-                              backgroundColor: alpha(theme.palette.primary.main, 0.2),
-                              borderRadius: '4px',
-                              '&:hover': {
-                                backgroundColor: alpha(theme.palette.primary.main, 0.3),
+                            transition: 'all 0.2s ease-in-out',
+                          }} 
+                        />
+                      </Typography>
+                      <Droppable droppableId={columnId}>
+                        {(provided, snapshot) => (
+                          <Box
+                            ref={provided.innerRef}
+                            {...provided.droppableProps}
+                            sx={{ 
+                              flex: 1,
+                              overflowY: 'auto',
+                              overflowX: 'hidden',
+                              px: 1,
+                              mx: -1,
+                              '&::-webkit-scrollbar': {
+                                width: '8px',
                               },
-                            },
-                            minHeight: '100px',
-                            transition: 'all 0.3s ease-in-out',
-                            backgroundColor: snapshot.isDraggingOver 
-                              ? alpha(theme.palette.primary.main, 0.05)
-                              : 'transparent',
-                            borderRadius: 2,
-                            position: 'relative',
-                            zIndex: snapshot.isDraggingOver ? 2 : 1,
-                          }}
-                        >
-                          <AnimatePresence>
-                            {columnTasks.map((task, index) => (
-                              <motion.div
-                                key={task.id}
-                                initial={{ opacity: 0, y: 20 }}
-                                animate={{ opacity: 1, y: 0 }}
-                                exit={{ opacity: 0, y: -20 }}
-                                transition={{ duration: 0.2 }}
-                                style={{ zIndex: 1 }}
-                              >
-                                <Draggable key={task.id} draggableId={task.id} index={index}>
-                                  {(provided, snapshot) => (
-                                    <Paper
-                                      ref={provided.innerRef}
-                                      {...provided.draggableProps}
-                                      {...provided.dragHandleProps}
-                                      elevation={snapshot.isDragging ? 8 : 0}
-                                      sx={{
-                                        p: 2,
-                                        mb: 2,
-                                        backgroundColor: theme.palette.background.paper,
-                                        borderRadius: 2,
-                                        border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
-                                        transition: 'all 0.3s ease-in-out',
-                                        transform: snapshot.isDragging ? 'scale(1.02)' : 'none',
-                                        '&:hover': {
-                                          transform: 'translateY(-2px)',
-                                          boxShadow: 3,
-                                          '& .task-actions': {
-                                            opacity: 1,
-                                          },
-                                        },
-                                        position: 'relative',
-                                        '&::after': {
-                                          content: '""',
-                                          position: 'absolute',
-                                          top: 0,
-                                          left: 0,
-                                          right: 0,
-                                          bottom: 0,
-                                          background: snapshot.isDragging
-                                            ? `linear-gradient(45deg, ${alpha(theme.palette.primary.main, 0.1)}, transparent)`
-                                            : 'none',
+                              '&::-webkit-scrollbar-track': {
+                                backgroundColor: 'transparent',
+                              },
+                              '&::-webkit-scrollbar-thumb': {
+                                backgroundColor: alpha(theme.palette.primary.main, 0.2),
+                                borderRadius: '4px',
+                                '&:hover': {
+                                  backgroundColor: alpha(theme.palette.primary.main, 0.3),
+                                },
+                              },
+                              minHeight: '100px',
+                              transition: 'all 0.3s ease-in-out',
+                              backgroundColor: snapshot.isDraggingOver 
+                                ? alpha(theme.palette.primary.main, 0.05)
+                                : 'transparent',
+                              borderRadius: 2,
+                              position: 'relative',
+                              zIndex: snapshot.isDraggingOver ? 2 : 1,
+                            }}
+                          >
+                            <AnimatePresence>
+                              {columnTasks.map((task, index) => (
+                                <motion.div
+                                  key={task.id}
+                                  initial={{ opacity: 0, y: 20 }}
+                                  animate={{ opacity: 1, y: 0 }}
+                                  exit={{ opacity: 0, y: -20 }}
+                                  transition={{ duration: 0.2 }}
+                                  style={{ zIndex: 1 }}
+                                >
+                                  <Draggable key={task.id} draggableId={task.id} index={index}>
+                                    {(provided, snapshot) => (
+                                      <Paper
+                                        ref={provided.innerRef}
+                                        {...provided.draggableProps}
+                                        {...provided.dragHandleProps}
+                                        elevation={snapshot.isDragging ? 8 : 0}
+                                        sx={{
+                                          p: 2,
+                                          mb: 2,
+                                          backgroundColor: theme.palette.background.paper,
                                           borderRadius: 2,
-                                          pointerEvents: 'none',
-                                        },
-                                        zIndex: snapshot.isDragging ? 3 : 1,
-                                      }}
-                                    >
-                                      {editingTask?.id === task.id ? (
-                                        <Box sx={{ p: 1 }}>
-                                          <TextField
-                                            fullWidth
-                                            value={editingTask.title}
-                                            onChange={(e) => setEditingTask({
-                                              ...editingTask,
-                                              title: e.target.value,
-                                            })}
-                                            sx={{ mb: 2 }}
-                                          />
-                                          <TextField
-                                            fullWidth
-                                            multiline
-                                            rows={3}
-                                            value={editingTask.description}
-                                            onChange={(e) => setEditingTask({
-                                              ...editingTask,
-                                              description: e.target.value,
-                                            })}
-                                            sx={{ mb: 2 }}
-                                          />
-                                          <LocalizationProvider dateAdapter={AdapterDateFns}>
-                                            <DatePicker
-                                              value={editingTask.deadline}
-                                              onChange={(newValue) => setEditingTask({
+                                          border: `1px solid ${alpha(theme.palette.divider, 0.1)}`,
+                                          transition: 'all 0.3s ease-in-out',
+                                          transform: snapshot.isDragging ? 'scale(1.02)' : 'none',
+                                          '&:hover': {
+                                            transform: 'translateY(-2px)',
+                                            boxShadow: 3,
+                                            '& .task-actions': {
+                                              opacity: 1,
+                                            },
+                                          },
+                                          position: 'relative',
+                                          '&::after': {
+                                            content: '""',
+                                            position: 'absolute',
+                                            top: 0,
+                                            left: 0,
+                                            right: 0,
+                                            bottom: 0,
+                                            background: snapshot.isDragging
+                                              ? `linear-gradient(45deg, ${alpha(theme.palette.primary.main, 0.1)}, transparent)`
+                                              : 'none',
+                                            borderRadius: 2,
+                                            pointerEvents: 'none',
+                                          },
+                                          zIndex: snapshot.isDragging ? 3 : 1,
+                                        }}
+                                      >
+                                        {editingTask?.id === task.id ? (
+                                          <Box sx={{ p: 1 }}>
+                                            <TextField
+                                              fullWidth
+                                              value={editingTask.title}
+                                              onChange={(e) => setEditingTask({
                                                 ...editingTask,
-                                                deadline: newValue,
+                                                title: e.target.value,
                                               })}
-                                              sx={{ width: '100%', mb: 2 }}
+                                              sx={{ mb: 2 }}
                                             />
-                                          </LocalizationProvider>
-                                          <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
-                                            <Button
-                                              onClick={() => setEditingTask(null)}
-                                              variant="outlined"
-                                              size="small"
-                                            >
-                                              Cancel
-                                            </Button>
-                                            <Button
-                                              onClick={() => handleTaskUpdate(editingTask)}
-                                              variant="contained"
-                                              size="small"
-                                            >
-                                              Save
-                                            </Button>
-                                          </Box>
-                                        </Box>
-                                      ) : (
-                                        <>
-                                          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                                            <Typography 
-                                              variant="h6" 
-                                              sx={{ 
-                                                fontWeight: 600,
-                                                fontSize: '1rem',
-                                              }}
-                                            >
-                                              {task.title}
-                                            </Typography>
-                                            <Box
-                                              className="task-actions"
-                                              sx={{
-                                                opacity: 0,
-                                                transition: 'opacity 0.2s',
-                                                display: 'flex',
-                                                gap: 1,
-                                              }}
-                                            >
-                                              <IconButton 
+                                            <TextField
+                                              fullWidth
+                                              multiline
+                                              rows={3}
+                                              value={editingTask.description}
+                                              onChange={(e) => setEditingTask({
+                                                ...editingTask,
+                                                description: e.target.value,
+                                              })}
+                                              sx={{ mb: 2 }}
+                                            />
+                                            <LocalizationProvider dateAdapter={AdapterDateFns}>
+                                              <DatePicker
+                                                value={editingTask.deadline}
+                                                onChange={(newValue) => setEditingTask({
+                                                  ...editingTask,
+                                                  deadline: newValue,
+                                                })}
+                                                sx={{ width: '100%', mb: 2 }}
+                                              />
+                                            </LocalizationProvider>
+                                            <Box sx={{ display: 'flex', gap: 1, justifyContent: 'flex-end' }}>
+                                              <Button
+                                                onClick={() => setEditingTask(null)}
+                                                variant="outlined"
                                                 size="small"
-                                                onClick={() => handleEditTask(task)}
-                                                sx={{ 
-                                                  color: theme.palette.primary.main,
-                                                  '&:hover': {
-                                                    backgroundColor: alpha(theme.palette.primary.main, 0.1),
-                                                  },
-                                                }}
                                               >
-                                                <EditIcon />
-                                              </IconButton>
-                                              <IconButton 
+                                                Cancel
+                                              </Button>
+                                              <Button
+                                                onClick={() => handleTaskUpdate(editingTask)}
+                                                variant="contained"
                                                 size="small"
-                                                onClick={() => handleDeleteTask(task)}
-                                                sx={{ 
-                                                  color: theme.palette.error.main,
-                                                  '&:hover': {
-                                                    backgroundColor: alpha(theme.palette.error.main, 0.1),
-                                                  },
-                                                }}
                                               >
-                                                <DeleteIcon />
-                                              </IconButton>
+                                                Save
+                                              </Button>
                                             </Box>
                                           </Box>
-                                          <Typography 
-                                            variant="body2" 
-                                            color="text.secondary" 
-                                            sx={{ 
-                                              mt: 1,
-                                              lineHeight: 1.5,
-                                            }}
-                                          >
-                                            {task.description}
-                                          </Typography>
-                                          <Box 
-                                            sx={{ 
-                                              mt: 2, 
-                                              display: 'flex', 
-                                              justifyContent: 'space-between', 
-                                              alignItems: 'center' 
-                                            }}
-                                          >
-                                            <Tooltip title={getStatusDescription(getStatusType(task.deadline, task.status))}>
-                                              <Chip
-                                                label={task.deadline.toLocaleDateString()}
-                                                size="small"
-                                                sx={{
-                                                  backgroundColor: getStatusColor(task.deadline, task.status),
-                                                  color: 'white',
-                                                  fontWeight: 500,
-                                                  '& .MuiChip-label': {
-                                                    px: 1,
-                                                  },
+                                        ) : (
+                                          <>
+                                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                                              <Typography 
+                                                variant="h6" 
+                                                sx={{ 
+                                                  fontWeight: 600,
+                                                  fontSize: '1rem',
                                                 }}
-                                              />
-                                            </Tooltip>
-                                          </Box>
-                                        </>
-                                      )}
-                                    </Paper>
-                                  )}
-                                </Draggable>
-                              </motion.div>
-                            ))}
-                          </AnimatePresence>
-                          {provided.placeholder}
-                        </Box>
-                      )}
-                    </Droppable>
-                  </Paper>
-                );
-              })}
-            </Box>
-          </DragDropContext>
+                                              >
+                                                {task.title}
+                                              </Typography>
+                                              <Box
+                                                className="task-actions"
+                                                sx={{
+                                                  opacity: 0,
+                                                  transition: 'opacity 0.2s',
+                                                  display: 'flex',
+                                                  gap: 1,
+                                                }}
+                                              >
+                                                <IconButton 
+                                                  size="small"
+                                                  onClick={() => handleEditTask(task)}
+                                                  sx={{ 
+                                                    color: theme.palette.primary.main,
+                                                    '&:hover': {
+                                                      backgroundColor: alpha(theme.palette.primary.main, 0.1),
+                                                    },
+                                                  }}
+                                                >
+                                                  <EditIcon />
+                                                </IconButton>
+                                                <IconButton 
+                                                  size="small"
+                                                  onClick={() => handleDeleteTask(task)}
+                                                  sx={{ 
+                                                    color: theme.palette.error.main,
+                                                    '&:hover': {
+                                                      backgroundColor: alpha(theme.palette.error.main, 0.1),
+                                                    },
+                                                  }}
+                                                >
+                                                  <DeleteIcon />
+                                                </IconButton>
+                                              </Box>
+                                            </Box>
+                                            <Typography 
+                                              variant="body2" 
+                                              color="text.secondary" 
+                                              sx={{ 
+                                                mt: 1,
+                                                lineHeight: 1.5,
+                                              }}
+                                            >
+                                              {task.description}
+                                            </Typography>
+                                            <Box 
+                                              sx={{ 
+                                                mt: 2, 
+                                                display: 'flex', 
+                                                justifyContent: 'space-between', 
+                                                alignItems: 'center' 
+                                              }}
+                                            >
+                                              <Tooltip title={getStatusDescription(getStatusType(task.deadline, task.status))}>
+                                                <Chip
+                                                  label={task.deadline.toLocaleDateString()}
+                                                  size="small"
+                                                  sx={{
+                                                    backgroundColor: getStatusColor(task.deadline, task.status),
+                                                    color: 'white',
+                                                    fontWeight: 500,
+                                                    '& .MuiChip-label': {
+                                                      px: 1,
+                                                    },
+                                                  }}
+                                                />
+                                              </Tooltip>
+                                            </Box>
+                                          </>
+                                        )}
+                                      </Paper>
+                                    )}
+                                  </Draggable>
+                                </motion.div>
+                              ))}
+                            </AnimatePresence>
+                            {provided.placeholder}
+                          </Box>
+                        )}
+                      </Droppable>
+                    </Paper>
+                  );
+                })}
+              </Box>
+            </DragDropContext>
+          )}
         </Box>
 
         <motion.div
